@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: dating_user
+      POSTGRES_PASSWORD: dating_pass
+      POSTGRES_DB: dating_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
