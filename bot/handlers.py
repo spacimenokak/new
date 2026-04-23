@@ -1,11 +1,15 @@
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy.ext.asyncio import AsyncSession
-from db.models import User
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_
+from db.models import User, Profile
+from db.crud import get_profile, create_interaction, check_match, get_next_profile, create_profile
+from cache.redis_client import RedisCache
+from rating.rating_service import RatingService
+from bot.keyboards import get_action_keyboard
 
 router = Router()
 
@@ -55,11 +59,11 @@ async def register_age(message: Message, state: FSMContext, session: AsyncSessio
     await state.set_state(RegisterForm.city)
 
 @router.message(RegisterForm.city)
-async def register_city(message: Message, state: FSMContext, session: AsyncSession):
+async def register_city(message: Message, state: FSMContext, session: AsyncSession, redis_cache: RedisCache):
     data = await state.get_data()
     telegram_id = message.from_user.id
 
-    # Обновляем пользователя
+    # 1. Обновляем юзера (как и было)
     result = await session.execute(
         select(User).where(User.telegram_id == telegram_id)
     )
@@ -69,12 +73,108 @@ async def register_city(message: Message, state: FSMContext, session: AsyncSessi
     user.city = message.text
     user.is_registered = True
 
+    # 2. ВАЖНО: Создаем профиль в таблице profiles, чтобы анкету видели другие
+    await create_profile(
+        session, 
+        user_id=telegram_id, 
+        name=user.name, 
+        age=user.age, 
+        city=user.city
+    )
+
     await session.commit()
     await state.clear()
 
-    await message.answer(
-        f"✅ Регистрация завершена!\n\n"
-        f"Имя: {user.name}\n"
-        f"Возраст: {user.age}\n"
-        f"Город: {user.city}"
+    await message.answer(f"✅ Регистрация завершена!\n\nИмя: {user.name}\nВозраст: {user.age}\nГород: {user.city}")
+    
+    # 3. Сразу показываем первую анкету, чтобы юзер не ждал
+    await show_next_profile(message, session, redis_cache)
+
+@router.message(Command("next"))
+@router.message(F.text == "/next")
+@router.message(Command("next"))
+@router.message(F.text == "/next")
+async def show_next_profile(message: Message, session: AsyncSession, redis_cache: RedisCache):
+    user_id = message.from_user.id
+    
+    # Пытаемся достать следующий ID из кэша
+    profile_id = await redis_cache.pop_next(user_id)
+    
+    if not profile_id:
+        profiles = await get_next_profile(session, user_id)
+        
+        if not profiles:
+            # ТЫ ПОТЕРЯЛА КНОПКУ ЗДЕСЬ, ВОЗВРАЩАЕМ:
+            retry_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Попробовать еще раз", callback_data="refresh_feed")]
+            ])
+            await message.answer("Пока что анкет нет! Загляни чуть позже или нажми кнопку.", reply_markup=retry_kb)
+            return
+            
+        profile_ids = [p.user_id for p in profiles]
+        profile_id = profile_ids.pop(0)
+        await redis_cache.set_feed(user_id, profile_ids)
+
+    profile = await get_profile(session, profile_id)
+    
+    if not profile:
+        return await show_next_profile(message, session, redis_cache)
+
+    # ВОТ ЭТОГО КУСКА У ТЕБЯ СЕЙЧАС НЕТ! БЕЗ НЕГО БОТ НИЧЕГО НЕ НАПИШЕТ:
+    text = f"👤 {profile.name}, {profile.age}\n📍 {profile.city}\n\n{profile.bio or 'О себе пока пусто...'}"
+    await message.answer(text, reply_markup=get_action_keyboard(profile.user_id))
+
+@router.callback_query(F.data == "refresh_feed")
+async def refresh_feed(callback: CallbackQuery, session: AsyncSession, redis_cache: RedisCache):
+    await show_next_profile(callback.message, session, redis_cache)
+    await callback.answer()
+@router.callback_query(F.data.startswith("like:"))
+async def handle_like(callback: CallbackQuery, session: AsyncSession, redis_cache: RedisCache):
+    target_id = int(callback.data.split(":")[1])
+    actor_id = callback.from_user.id
+    
+    # Сохраняем лайк
+    await create_interaction(session, actor_id, target_id, "like")
+    
+    # ======= ДОБАВЛЯЕМ ОТПРАВКУ УВЕДОМЛЕНИЯ =======
+    try:
+        await callback.bot.send_message(
+            target_id, 
+            "❤️ Кто-то лайкнул твою анкету! Скорее жми /next, чтобы узнать кто."
+        )
+    except Exception:
+        pass # Если юзер заблокировал бота, ошибка не положит программу
+    # ===============================================
+
+    # Проверяем взаимность
+    is_match = await check_match(session, actor_id, target_id)
+    
+    if is_match:
+        await callback.message.answer(f"🎉 У вас мэтч! Напишите @user{target_id}")
+    else:
+        await callback.message.answer("Лайк отправлен!")
+    
+    # Показываем следующую анкету
+    await show_next_profile(callback.message, session, redis_cache)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("skip:"))
+async def handle_skip(callback: CallbackQuery, session: AsyncSession, redis_cache: RedisCache):
+    target_id = int(callback.data.split(":")[1])
+    actor_id = callback.from_user.id
+    
+    await create_interaction(session, actor_id, target_id, "skip")
+    await callback.message.answer("Пропущено")
+    await show_next_profile(callback.message, session, redis_cache)
+    await callback.answer()
+
+@router.callback_query(F.data == "sleep")
+async def handle_sleep(callback: CallbackQuery, session: AsyncSession, redis_cache: RedisCache):
+    user_id = callback.from_user.id
+    await session.execute(
+        "UPDATE profiles SET is_active = NOT is_active WHERE user_id = :uid",
+        {"uid": user_id}
     )
+    await session.commit()
+    await callback.message.answer("💤 Спящий режим включён/выключен")
+    await callback.answer()
