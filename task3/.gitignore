@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+data/
+*.db
+benchmark_results.json
+benchmark_table.md
+.venv/
