@@ -1,0 +1,52 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  cache-aside:
+    build: .
+    ports:
+      - "8001:8000"
+    environment:
+      CACHE_STRATEGY: cache_aside
+      REDIS_URL: redis://redis:6379/0
+      REDIS_KEY_PREFIX: task3_ca
+      DB_PATH: /data/cache_aside.db
+      WRITE_BACK_FLUSH_INTERVAL_S: "1"
+    volumes:
+      - task3_data:/data
+    depends_on:
+      - redis
+
+  write-through:
+    build: .
+    ports:
+      - "8002:8000"
+    environment:
+      CACHE_STRATEGY: write_through
+      REDIS_URL: redis://redis:6379/0
+      REDIS_KEY_PREFIX: task3_wt
+      DB_PATH: /data/write_through.db
+    volumes:
+      - task3_data:/data
+    depends_on:
+      - redis
+
+  write-back:
+    build: .
+    ports:
+      - "8003:8000"
+    environment:
+      CACHE_STRATEGY: write_back
+      REDIS_URL: redis://redis:6379/0
+      REDIS_KEY_PREFIX: task3_wb
+      DB_PATH: /data/write_back.db
+      WRITE_BACK_FLUSH_INTERVAL_S: "0.5"
+    volumes:
+      - task3_data:/data
+    depends_on:
+      - redis
+
+volumes:
+  task3_data:
