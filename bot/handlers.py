@@ -20,7 +20,7 @@ class RegisterForm(StatesGroup):
     city = State()
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
+async def cmd_start(message: Message, session: AsyncSession, state: FSMContext, redis_cache: RedisCache):
     telegram_id = message.from_user.id
     username = message.from_user.username
 
@@ -39,6 +39,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext):
     else:
         if user.is_registered:
             await message.answer(f"С возвращением, {user.name}!")
+            await show_next_profile(message, session, redis_cache)
         else:
             await message.answer("Давай завершим регистрацию. Как тебя зовут?")
             await state.set_state(RegisterForm.name)
@@ -81,7 +82,6 @@ async def register_city(message: Message, state: FSMContext, session: AsyncSessi
         age=user.age, 
         city=user.city
     )
-
     await session.commit()
     await state.clear()
 
@@ -92,10 +92,15 @@ async def register_city(message: Message, state: FSMContext, session: AsyncSessi
 
 @router.message(Command("next"))
 @router.message(F.text == "/next")
-@router.message(Command("next"))
-@router.message(F.text == "/next")
-async def show_next_profile(message: Message, session: AsyncSession, redis_cache: RedisCache):
-    user_id = message.from_user.id
+async def show_next_profile(
+    message: Message,
+    session: AsyncSession,
+    redis_cache: RedisCache,
+    viewer_id: int | None = None,
+):
+    # Важно: для callback.message.from_user это будет BOT, поэтому viewer_id
+    # нужно передавать явно из callback.from_user.id.
+    user_id = viewer_id or message.from_user.id
     
     # Пытаемся достать следующий ID из кэша
     profile_id = await redis_cache.pop_next(user_id)
@@ -104,7 +109,6 @@ async def show_next_profile(message: Message, session: AsyncSession, redis_cache
         profiles = await get_next_profile(session, user_id)
         
         if not profiles:
-            # ТЫ ПОТЕРЯЛА КНОПКУ ЗДЕСЬ, ВОЗВРАЩАЕМ:
             retry_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Попробовать еще раз", callback_data="refresh_feed")]
             ])
@@ -126,55 +130,56 @@ async def show_next_profile(message: Message, session: AsyncSession, redis_cache
 
 @router.callback_query(F.data == "refresh_feed")
 async def refresh_feed(callback: CallbackQuery, session: AsyncSession, redis_cache: RedisCache):
-    await show_next_profile(callback.message, session, redis_cache)
+    await show_next_profile(callback.message, session, redis_cache, viewer_id=callback.from_user.id)
     await callback.answer()
+    
 @router.callback_query(F.data.startswith("like:"))
 async def handle_like(callback: CallbackQuery, session: AsyncSession, redis_cache: RedisCache):
     target_id = int(callback.data.split(":")[1])
     actor_id = callback.from_user.id
     
-    # Сохраняем лайк
+    # 1. Сразу отвечаем на кнопку, чтобы убрать "часики"
+    await callback.answer()
+    
+    # 2. Сохраняем лайк
     await create_interaction(session, actor_id, target_id, "like")
     
-    # ======= ДОБАВЛЯЕМ ОТПРАВКУ УВЕДОМЛЕНИЯ =======
-    try:
-        await callback.bot.send_message(
-            target_id, 
-            "❤️ Кто-то лайкнул твою анкету! Скорее жми /next, чтобы узнать кто."
-        )
-    except Exception:
-        pass # Если юзер заблокировал бота, ошибка не положит программу
-    # ===============================================
-
-    # Проверяем взаимность
+    # 3. Проверяем взаимность
     is_match = await check_match(session, actor_id, target_id)
+    await session.commit()
+    
+    # 4. Чистим кэш пользователя в Redis, чтобы он не подсунул старый ID
+    await redis_cache.set_feed(actor_id, [])
     
     if is_match:
-        await callback.message.answer(f"🎉 У вас мэтч! Напишите @user{target_id}")
-    else:
-        await callback.message.answer("Лайк отправлен!")
-    
-    # Показываем следующую анкету
-    await show_next_profile(callback.message, session, redis_cache)
-    await callback.answer()
+        # Если мэтч — показываем удобную ссылку на профиль в Telegram
+        await callback.message.answer(
+            "🎉 У вас мэтч!\n"
+            f"Открыть профиль: tg://user?id={target_id}"
+        )
+        return 
+
+    # Если не мэтч — показываем следующую анкету
+    await callback.message.answer("Лайк отправлен!")
+    await show_next_profile(callback.message, session, redis_cache, viewer_id=actor_id)
 
 @router.callback_query(F.data.startswith("skip:"))
 async def handle_skip(callback: CallbackQuery, session: AsyncSession, redis_cache: RedisCache):
     target_id = int(callback.data.split(":")[1])
     actor_id = callback.from_user.id
     
-    await create_interaction(session, actor_id, target_id, "skip")
-    await callback.message.answer("Пропущено")
-    await show_next_profile(callback.message, session, redis_cache)
     await callback.answer()
+    await create_interaction(session, actor_id, target_id, "skip")
+    await session.commit()
+    await callback.message.answer("Пропущено")
+    await show_next_profile(callback.message, session, redis_cache, viewer_id=actor_id)
 
 @router.callback_query(F.data == "sleep")
 async def handle_sleep(callback: CallbackQuery, session: AsyncSession, redis_cache: RedisCache):
     user_id = callback.from_user.id
-    await session.execute(
-        "UPDATE profiles SET is_active = NOT is_active WHERE user_id = :uid",
-        {"uid": user_id}
-    )
-    await session.commit()
+    profile = await get_profile(session, user_id)
+    if profile:
+        profile.is_active = not bool(profile.is_active)
+        await session.commit()
     await callback.message.answer("💤 Спящий режим включён/выключен")
     await callback.answer()

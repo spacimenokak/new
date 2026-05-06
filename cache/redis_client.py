@@ -1,12 +1,18 @@
 import redis.asyncio as redis
 import json
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 class RedisCache:
     def __init__(self):
         self.redis = None
     
     async def connect(self):
-        self.redis = await redis.from_url("redis://localhost:6379", decode_responses=True)
+        self.redis = await redis.from_url(REDIS_URL, decode_responses=True)
     
     async def get_feed(self, user_id: int):
         """Достать очередь анкет для пользователя"""
@@ -20,7 +26,7 @@ class RedisCache:
         await self.redis.delete(key)
         if profile_ids:
             await self.redis.rpush(key, *profile_ids)
-            await self.redis.expire(key, 3600)  # живёт час
+            await self.redis.expire(key, 3600)
     
     async def pop_next(self, user_id: int):
         """Достать следующую анкету"""
