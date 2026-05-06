@@ -9,7 +9,6 @@ class RatingService:
         if profile.age: score += 0.2
         if profile.city: score += 0.2
         if profile.bio and len(profile.bio) > 20: score += 0.2
-        if profile.photo_urls: score += 0.2
         return score
     
     @staticmethod

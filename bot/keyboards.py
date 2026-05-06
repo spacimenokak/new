@@ -7,5 +7,5 @@ def get_action_keyboard(target_user_id: int):
             InlineKeyboardButton(text="❤️ Лайк", callback_data=f"like:{target_user_id}"),
             InlineKeyboardButton(text="❌ Скип", callback_data=f"skip:{target_user_id}")
         ],
-        [InlineKeyboardButton(text="💤 Спящий режим", callback_data="sleep")]
+        [InlineKeyboardButton(text="💤 Спящий режим", callback_data="sleep")],
     ])

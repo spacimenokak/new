@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from .models import User, Profile, Rating, Interaction, Match
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ========== Профили ==========
 
@@ -13,17 +13,28 @@ async def get_profile(session: AsyncSession, user_id: int):
     return result.scalar_one_or_none()
 
 async def create_profile(session: AsyncSession, user_id: int, name: str, age: int, city: str):
-    """Создать профиль после регистрации"""
+    """
+    Создать профиль после регистрации.
+    Идемпотентно: если профиль уже есть — обновит базовые поля.
+    """
+    existing = await get_profile(session, user_id)
+    if existing:
+        existing.name = name
+        existing.age = age
+        existing.city = city
+        existing.is_filled = True
+        existing.is_active = True
+        return existing
+
     profile = Profile(
         user_id=user_id,
         name=name,
         age=age,
         city=city,
         is_filled=True,
-        is_active=True
+        is_active=True,
     )
     session.add(profile)
-    await session.commit()
     return profile
 
 async def update_profile(session: AsyncSession, user_id: int, **kwargs):
@@ -33,7 +44,6 @@ async def update_profile(session: AsyncSession, user_id: int, **kwargs):
         for key, value in kwargs.items():
             if hasattr(profile, key):
                 setattr(profile, key, value)
-        await session.commit()
     return profile
 
 # ========== Взаимодействия (лайки/скипы) ==========
@@ -65,8 +75,6 @@ async def create_interaction(session: AsyncSession, actor_id: int, target_id: in
             total_skips=1 if type_ == "skip" else 0
         )
         session.add(rating)
-    
-    await session.commit()
     return interaction
 
 async def check_match(session: AsyncSession, user1_id: int, user2_id: int):
@@ -107,34 +115,28 @@ async def check_match(session: AsyncSession, user1_id: int, user2_id: int):
                 rating = result.scalar_one_or_none()
                 if rating:
                     rating.total_matches += 1
-            
-            await session.commit()
             return True
     return False
 
 # ========== Выдача анкет ==========
 
 async def get_next_profile(session: AsyncSession, current_user_id: int, limit: int = 10):
-    """Получить список анкет для показа (с учётом предпочтений)"""
-    # Сначала получим профиль текущего пользователя
-    current_profile = await get_profile(session, current_user_id)
-    if not current_profile:
-        return []
-    
-    # Запрос: другие пользователи, которые активны, не текущий, и которых ещё не лайкнули/скипнули
+    # ПРИНУДИТЕЛЬНО отправляем все лайки из памяти в БД перед поиском
+    await session.flush() 
+
     result = await session.execute(
         select(Profile)
+        .join(Rating, Rating.user_id == Profile.user_id, isouter=True)
         .where(Profile.user_id != current_user_id)
         .where(Profile.is_active == True)
         .where(Profile.is_filled == True)
+        # Более надежный способ исключения просмотренных:
         .where(
-            ~select(Interaction).where(
-                and_(
-                    Interaction.actor_id == current_user_id,
-                    Interaction.target_id == Profile.user_id
-                )
-            ).exists()
+            ~Profile.user_id.in_(
+                select(Interaction.target_id).where(Interaction.actor_id == current_user_id)
+            )
         )
+        .order_by(Rating.combined_score.desc().nulls_last()) 
         .limit(limit)
     )
     return result.scalars().all()
@@ -150,7 +152,7 @@ async def get_user_stats(session: AsyncSession):
     total_matches = await session.scalar(select(func.count()).select_from(Match))
     
     # Активных сегодня (условно: зарегистрированных за последние 24 часа)
-    yesterday = datetime.utcnow()
+    yesterday = datetime.utcnow() - timedelta(days=1)
     active_today = await session.scalar(
         select(func.count()).select_from(User)
         .where(User.created_at >= yesterday)
@@ -167,6 +169,5 @@ async def ban_user(session: AsyncSession, user_id: int):
     profile = await get_profile(session, user_id)
     if profile:
         profile.is_active = False
-        await session.commit()
         return True
     return False
