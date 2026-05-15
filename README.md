@@ -26,6 +26,36 @@ python -m bot.main
 
 Примечание: если сеть/провайдер блокирует доступ к `api.telegram.org`, polling не сможет стартовать — в этом случае нужен VPN/прокси на машине, где запускается бот.
 
+### Этап 4 (доп. функции)
+
+Поднимаются PostgreSQL, **Redis** (кэш ленты, брокер Celery, поток событий), MinIO, одноразовый **migrate**, **event_consumer**, **celery_worker**, **celery_beat** и **bot**:
+
+```bash
+# В корне репозитория: задай BOT_TOKEN в .env (или в окружении) для сервиса bot
+docker compose up -d --build
+```
+
+- **Celery worker**: `celery -A worker.celery_app:celery_app worker` — задачи пересчёта рейтинга (`worker/tasks.py`).
+- **Celery beat**: периодически ставит в очередь полный пересчёт всех рейтингов (интервал `CELERY_BEAT_RECALC_SEC`, по умолчанию 3600 с).
+- **Redis**: DB `0` — кэш ленты; DB `1` — брокер Celery; DB `2` — результаты Celery; DB `3` — stream событий `dating:events` (лайк/скип/мэтч).
+- **event_consumer**: читает stream и обновляет активность по часам / метрики (`worker/event_consumer.py`).
+- **Оптимизация БД**: индексы на `interactions`, `profiles`, `ratings` создаются при `init_db` (`db/database.py`).
+- **Тесты / CI**: `pytest` локально; GitHub Actions (`.github/workflows/ci.yml`) на push/PR в `main`/`master` — unit-тесты + сборка Docker + проверка compose.
+- **Локально без Docker** (воркер на Windows удобнее с пулом solo):
+
+```bash
+docker compose up -d postgres redis
+# затем в двух терминалах из корня репозитория:
+celery -A worker.celery_app:celery_app worker --loglevel=INFO --pool=solo
+celery -A worker.celery_app:celery_app beat --loglevel=INFO
+```
+
+Админ-команды (telegram id в `ADMIN_IDS`): `/admin_recalc <telegram_id>`, `/admin_recalc_all` — постановка задач Celery.
+
+Пользовательские: `/invite` — реферальная ссылка; при регистрации можно отправить фото (MinIO/S3).
+
+**Метрики:** http://localhost:9100/metrics (текст) · **Grafana (графики):** http://localhost:3000 — `admin` / `dating`, дашборд «Dating Bot — метрики». Перед Grafana: `docker compose up -d prometheus grafana` и запущенный бот (`python -m bot.main` на хосте с VPN).
+
 ***
 
 ## 2. Архитектура системы

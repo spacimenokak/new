@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Бот на хосте (python -m bot.main) — Windows/macOS Docker Desktop
+  - job_name: dating-bot-host
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9100"]
+
+  # Бот в контейнере docker compose (service bot)
+  - job_name: dating-bot-docker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["bot:9100"]

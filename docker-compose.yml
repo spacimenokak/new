@@ -9,6 +9,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dating_user -d dating_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
@@ -17,6 +22,140 @@ services:
     volumes:
       - redis_data:/data
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  minio_init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minio minio123 2>/dev/null; do sleep 1; done;
+      mc mb local/dating-photos --ignore-existing;
+      mc anonymous set download local/dating-photos;
+      echo MinIO bucket ready;
+      "
+
+  migrate:
+    build: .
+    command: python init_db.py
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dating_user:dating_pass@postgres:5432/dating_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  event_consumer:
+    build: .
+    command: python -m worker.event_consumer
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dating_user:dating_pass@postgres:5432/dating_db
+      REDIS_URL: redis://redis:6379/0
+      REDIS_EVENTS_DB: "3"
+      REDIS_EVENTS_STREAM: dating:events
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+
+  celery_worker:
+    build: .
+    command: celery -A worker.celery_app:celery_app worker --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dating_user:dating_pass@postgres:5432/dating_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      SQL_ECHO: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+
+  celery_beat:
+    build: .
+    command: celery -A worker.celery_app:celery_app beat --loglevel=INFO
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dating_user:dating_pass@postgres:5432/dating_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      SQL_ECHO: "false"
+      CELERY_BEAT_RECALC_SEC: "3600"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+
+  bot:
+    build: .
+    command: python -m bot.main
+    ports:
+      - "9100:9100"
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      DATABASE_URL: postgresql+asyncpg://dating_user:dating_pass@postgres:5432/dating_db
+      REDIS_URL: redis://redis:6379/0
+      REDIS_EVENTS_DB: "3"
+      ADMIN_IDS: ${ADMIN_IDS:-}
+      SQL_ECHO: "false"
+      METRICS_PORT: "9100"
+      CELERY_BROKER_URL: redis://redis:6379/1
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio123
+      S3_BUCKET: dating-photos
+      S3_PUBLIC_BASE: http://localhost:9000/dating-photos
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      minio_init:
+        condition: service_completed_successfully
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: dating
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
   redis_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
