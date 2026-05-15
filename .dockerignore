@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.git/
+.env
+*.md
+task1/
+task2/
+task3/
+task4/

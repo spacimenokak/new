@@ -1,6 +1,5 @@
-from sqlalchemy import Column, BigInteger, String, Boolean, DateTime, Integer, Float, ForeignKey, CheckConstraint
+from sqlalchemy import Column, BigInteger, String, Boolean, DateTime, Integer, Float, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
 from datetime import datetime
 
 Base = declarative_base()
@@ -14,6 +13,8 @@ class User(Base):
     name = Column(String, nullable=True)
     age = Column(Integer, nullable=True)
     city = Column(String, nullable=True)
+    referral_code = Column(String(16), unique=True, nullable=True, index=True)
+    invited_by_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=True)
     is_registered = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -27,6 +28,7 @@ class Profile(Base):
     age = Column(Integer)
     city = Column(String(255))
     bio = Column(String(1000), nullable=True)
+    interests = Column(String(500), nullable=True)
     gender = Column(String(20))
     preferred_gender = Column(String(20))
     preferred_age_from = Column(Integer, default=18)
@@ -49,11 +51,18 @@ class Rating(Base):
     total_likes = Column(Integer, default=0)
     total_skips = Column(Integer, default=0)
     total_matches = Column(Integer, default=0)
+    initiated_chats = Column(Integer, default=0)
+    referral_bonus = Column(Float, default=0.0)
+    activity_by_hour = Column(String, nullable=True)
 
 
 class Interaction(Base):
     __tablename__ = "interactions"
-    
+
+    __table_args__ = (
+        UniqueConstraint("actor_id", "target_id", name="uq_interactions_actor_target"),
+    )
+
     id = Column(BigInteger, primary_key=True)
     actor_id = Column(BigInteger, ForeignKey("users.telegram_id"))
     target_id = Column(BigInteger, ForeignKey("users.telegram_id"))
@@ -69,3 +78,17 @@ class Match(Base):
     user2_id = Column(BigInteger, ForeignKey("users.telegram_id"))
     created_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String(20), default="active")
+
+
+class Referral(Base):
+    __tablename__ = "referrals"
+
+    __table_args__ = (
+        UniqueConstraint("invited_id", name="uq_referrals_invited_id"),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    inviter_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=False)
+    invited_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=False)
+    bonus_amount = Column(Float, default=0.05)
+    created_at = Column(DateTime, default=datetime.utcnow)

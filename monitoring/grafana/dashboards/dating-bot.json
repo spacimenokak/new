@@ -1,0 +1,106 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "dating_feed_requests_total", "legendFormat": "лента", "refId": "A" }],
+      "title": "Запросы ленты (всего)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "dating_likes_total", "legendFormat": "лайки", "refId": "A" }],
+      "title": "Лайки (всего)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "dating_skips_total", "legendFormat": "скипы", "refId": "A" }],
+      "title": "Скипы (всего)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "dating_matches_total", "legendFormat": "мэтчи", "refId": "A" }],
+      "title": "Мэтчи (всего)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "rate(dating_likes_total[1m])", "legendFormat": "лайки/с", "refId": "A" },
+        { "expr": "rate(dating_skips_total[1m])", "legendFormat": "скипы/с", "refId": "B" },
+        { "expr": "rate(dating_feed_requests_total[1m])", "legendFormat": "лента/с", "refId": "C" }
+      ],
+      "title": "Активность в боте (rate)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum by (event_type) (rate(dating_redis_events_published_total[1m]))", "legendFormat": "{{event_type}}", "refId": "A" },
+        { "expr": "sum by (event_type) (rate(dating_redis_events_consumed_total[1m]))", "legendFormat": "consumer {{event_type}}", "refId": "B" }
+      ],
+      "title": "События Redis Stream",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "dating_likes_total", "legendFormat": "лайки", "refId": "A" },
+        { "expr": "dating_skips_total", "legendFormat": "скипы", "refId": "B" },
+        { "expr": "dating_matches_total", "legendFormat": "мэтчи", "refId": "C" },
+        { "expr": "dating_chat_init_total", "legendFormat": "чаты", "refId": "D" },
+        { "expr": "dating_referrals_applied_total", "legendFormat": "рефералы", "refId": "E" },
+        { "expr": "dating_s3_uploads_total", "legendFormat": "S3 фото", "refId": "F" }
+      ],
+      "title": "Накопительные счётчики",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["dating", "okak"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timezone": "browser",
+  "title": "Dating Bot — метрики",
+  "uid": "dating-bot-okak",
+  "version": 1
+}
